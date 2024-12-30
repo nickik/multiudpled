@@ -7,6 +7,7 @@ use chrono::Utc;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicBool;
 use std::thread::yield_now;
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc::Sender;
 use dashmap::DashMap;
 use dashmap::mapref::one::{Ref, RefMut};
@@ -61,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             src: addr.parse().unwrap(),
             msg: vec![0u8; buffer_size],
             ready : false,
-            last_active : 0
+            last_active : SystemTime::UNIX_EPOCH
         });
 
         tasks.push(tokio::spawn(udp_listener(socket, buffer_size, port , arc1)));
@@ -83,21 +84,30 @@ async fn composer(framebuffer_map: Arc<DashMap<u16, FrameBufferState>>, width : 
 
     let buffer_size = width * height * pixel_size;
 
-    let mut composed_framebuffer = vec![0u8; buffer_size];
-
     let send_socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
 
     loop {
-        // Iterate over all framebuffers in the DashMap
-        framebuffer_map.iter().for_each(|entry| {
-            let framebuffer = entry.value();
+        let mut composed_framebuffer = vec![0u8; buffer_size];
+        let now = SystemTime::now();
 
-            // Check if the framebuffer is ready to be composed
-            if framebuffer.ready {
-                // Blend the current framebuffer into the composed framebuffer
-                blend_framebuffer(&mut composed_framebuffer, &framebuffer.msg);
+        let mut sorted_ports: Vec<u16> = framebuffer_map.iter().map(|entry| *entry.key()).collect();
+        sorted_ports.sort_unstable();
+
+        for port in sorted_ports {
+            if let Some(mut entry) = framebuffer_map.get_mut(&port) {
+
+                if now.duration_since(entry.last_active).unwrap_or(Duration::new(0, 0)) > Duration::new(5, 0) {
+                    entry.ready = false;
+                    entry.msg.fill(0);
+                }
+                let framebuffer = entry.value();
+
+                if framebuffer.ready {
+                    println!("port {}", port);
+                    blend_framebuffer(&mut composed_framebuffer, &framebuffer.msg);
+                }
             }
-        });
+        }
 
         // Extract only RGB bytes from the composed framebuffer
         let rgb_framebuffer: Vec<u8> = composed_framebuffer
@@ -109,11 +119,10 @@ async fn composer(framebuffer_map: Arc<DashMap<u16, FrameBufferState>>, width : 
         send_socket.send_to(&rgb_framebuffer, *FORWARD_ADDR).await.unwrap();
 
         // Simulate a frame delay (e.g., 16ms for ~60FPS)
-        tokio::time::sleep(tokio::time::Duration::from_millis(16)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(32)).await; /*16*10*/
     }
 }
 
-/// Blend a single framebuffer into the composed framebuffer
 fn blend_framebuffer(composed: &mut [u8], source: &[u8]) {
     assert_eq!(composed.len(), source.len());
 
@@ -157,7 +166,7 @@ async fn udp_listener(socket: UdpSocket, buffer_size: usize, port: u16, arc1: Ar
                     );
                     continue;
                 }
-                println!("Received {} bytes from {}", size, src);
+                println!("Received {} bytes from {} on port {}", size, src, port);
                 handle_message(&receive_buffer[..size], &socket, src, arc1.get_mut(&port).unwrap()).await;
             }
             Err(e) => {
@@ -171,15 +180,14 @@ struct FrameBufferState {
     src: SocketAddr,
     msg: Vec<u8>,
     ready : bool,
-    last_active : time_t
+    last_active : SystemTime
 }
 
 async fn handle_message(msg: &[u8], socket: &UdpSocket, src: SocketAddr, mut ref_mut: RefMut<'_, u16, FrameBufferState>) {
-    println!("Message from {}:", src);
 
     write_into_frame_buffer(ref_mut.value_mut(), msg);
     ref_mut.value_mut().ready = true;
-    ref_mut.value_mut().last_active = Utc::now().timestamp() as time_t;
+    ref_mut.value_mut().last_active = SystemTime::now();
 
     if let Err(e) = socket.send_to(msg, &src).await {
         eprintln!("Error sending response to {}: {}", src, e);
@@ -187,18 +195,38 @@ async fn handle_message(msg: &[u8], socket: &UdpSocket, src: SocketAddr, mut ref
 }
 
 fn write_into_frame_buffer(framebuffer: &mut FrameBufferState, changes: &[u8]) {
-    // Ensure the framebuffer and changes have the same size
+    //print_framebuffer_as_ascii(&framebuffer.msg, 48, 24);
     if framebuffer.msg.len() != changes.len() {
         panic!("Framebuffer and changes must have the same size!");
     }
-
-    // Ensure the framebuffer size is a multiple of 4 (RGBA format)
     if framebuffer.msg.len() % 4 != 0 {
         panic!("Framebuffer size must be a multiple of 4 (RGBA format)!");
     }
-
-    // Update the framebuffer with changes
     for (frame_pixel, &change_pixel) in framebuffer.msg.iter_mut().zip(changes.iter()) {
         *frame_pixel = change_pixel;
+    }
+}
+
+fn print_framebuffer_as_ascii(framebuffer: &[u8], width: usize, height: usize) {
+    use colored::*;
+
+    for row in framebuffer.chunks(width * RGB_SIZE_WITH_ALPHA) {
+        for pixel in row.chunks(RGB_SIZE_WITH_ALPHA) {
+            let r = pixel[0];
+            let g = pixel[1];
+            let b = pixel[2];
+
+            let brightness = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0;
+
+            let ascii_char = match brightness {
+                b if b < 0.2 => '#',
+                b if b < 0.5 => '*',
+                b if b < 0.8 => '.',
+                _ => ' ',
+            };
+
+            print!("{}", ascii_char.to_string().truecolor(r, g, b));
+        }
+        println!();
     }
 }
