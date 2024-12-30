@@ -12,13 +12,12 @@ const DEFAULT_HEIGHT: usize = 24;
 const RGB_SIZE: usize = 3;
 const RGB_SIZE_WITH_ALPHA: usize = 4;
 
-const DEFAULT_START_PORT : usize = 9000;
+const DEFAULT_START_PORT: usize = 9000;
 
-const DEFAULT_LETS_LOCATION  : &str = "ledsgc.luxeria.ch:54321";
+const DEFAULT_LETS_LOCATION: &str = "ledsgc.luxeria.ch:54321";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-
     let args: Vec<String> = env::args().collect();
 
     let start_port: usize = args
@@ -47,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Resolved sockets: {:?}", leds_location_sockets);
 
-    let leds_location= leds_location_sockets.get(0).unwrap().clone();
+    let leds_location = leds_location_sockets.get(0).unwrap().clone();
 
     let height: usize = args
         .get(3)
@@ -68,7 +67,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let framebuffer_dash = Arc::new(DashMap::<u16, FrameBufferState>::new());
 
     for offset in 0..layers {
-
         let port = start_port + offset;
         let addr = format!("0.0.0.0:{}", port);
         let socket = UdpSocket::bind(&addr).await?;
@@ -76,19 +74,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let arc = framebuffer_dash.clone();
         let arc1 = arc.clone();
-        arc1.insert(port as u16, FrameBufferState {
-            src: addr.parse().unwrap(),
-            msg: vec![0u8; buffer_size],
-            ready : false,
-            last_active : SystemTime::UNIX_EPOCH
-        });
+        arc1.insert(
+            port as u16,
+            FrameBufferState {
+                src: addr.parse().unwrap(),
+                msg: vec![0u8; buffer_size],
+                ready: false,
+                last_active: SystemTime::UNIX_EPOCH,
+            },
+        );
 
-        tasks.push(tokio::spawn(udp_listener(socket, buffer_size, port as u16 , arc1)));
+        tasks.push(tokio::spawn(udp_listener(
+            socket,
+            buffer_size,
+            port as u16,
+            arc1,
+        )));
     }
 
-    tasks.push(
-        tokio::spawn(composer(leds_location, framebuffer_dash.clone(), width, height, RGB_SIZE_WITH_ALPHA))
-    );
+    tasks.push(tokio::spawn(composer(
+        leds_location,
+        framebuffer_dash.clone(),
+        width,
+        height,
+        RGB_SIZE_WITH_ALPHA,
+    )));
 
     for task in tasks {
         task.await?;
@@ -97,7 +107,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn composer(leds_location : SocketAddr, framebuffer_map: Arc<DashMap<u16, FrameBufferState>>, width : usize, height : usize, pixel_size : usize) {
+async fn composer(
+    leds_location: SocketAddr,
+    framebuffer_map: Arc<DashMap<u16, FrameBufferState>>,
+    width: usize,
+    height: usize,
+    pixel_size: usize,
+) {
     // Determine the resolution of the final composed framebuffer
 
     let buffer_size = width * height * pixel_size;
@@ -113,8 +129,12 @@ async fn composer(leds_location : SocketAddr, framebuffer_map: Arc<DashMap<u16, 
 
         for port in sorted_ports {
             if let Some(mut entry) = framebuffer_map.get_mut(&port) {
-
-                if now.duration_since(entry.last_active).unwrap_or(Duration::new(0, 0)) > Duration::new(60, 0) { // TODO make secs a param
+                if now
+                    .duration_since(entry.last_active)
+                    .unwrap_or(Duration::new(0, 0))
+                    > Duration::new(60, 0)
+                {
+                    // TODO make secs a param
                     entry.ready = false;
                     entry.msg.fill(0);
                 }
@@ -133,7 +153,10 @@ async fn composer(leds_location : SocketAddr, framebuffer_map: Arc<DashMap<u16, 
             .copied()
             .collect();
 
-        send_socket.send_to(&rgb_framebuffer, leds_location).await.unwrap();
+        send_socket
+            .send_to(&rgb_framebuffer, leds_location)
+            .await
+            .unwrap();
 
         // Simulate a frame delay (e.g., 16ms for ~60FPS)
         tokio::time::sleep(tokio::time::Duration::from_millis(32)).await; /*16*10*/
@@ -162,8 +185,12 @@ fn blend_framebuffer(composed: &mut [u8], source: &[u8]) {
         });
 }
 
-async fn udp_listener(socket: UdpSocket, buffer_size: usize, port: u16, arc1: Arc<DashMap<u16, FrameBufferState>>) {
-
+async fn udp_listener(
+    socket: UdpSocket,
+    buffer_size: usize,
+    port: u16,
+    arc1: Arc<DashMap<u16, FrameBufferState>>,
+) {
     let mut receive_buffer = vec![0u8; buffer_size];
 
     loop {
@@ -184,7 +211,13 @@ async fn udp_listener(socket: UdpSocket, buffer_size: usize, port: u16, arc1: Ar
                     continue;
                 }
                 //println!("Received {} bytes from {} on port {}", size, src, port);
-                handle_message(&receive_buffer[..size], &socket, src, arc1.get_mut(&port).unwrap()).await;
+                handle_message(
+                    &receive_buffer[..size],
+                    &socket,
+                    src,
+                    arc1.get_mut(&port).unwrap(),
+                )
+                .await;
             }
             Err(e) => {
                 eprintln!("Error receiving UDP packet: {}", e);
@@ -196,12 +229,16 @@ async fn udp_listener(socket: UdpSocket, buffer_size: usize, port: u16, arc1: Ar
 struct FrameBufferState {
     src: SocketAddr,
     msg: Vec<u8>,
-    ready : bool,
-    last_active : SystemTime
+    ready: bool,
+    last_active: SystemTime,
 }
 
-async fn handle_message(msg: &[u8], socket: &UdpSocket, src: SocketAddr, mut ref_mut: RefMut<'_, u16, FrameBufferState>) {
-
+async fn handle_message(
+    msg: &[u8],
+    socket: &UdpSocket,
+    src: SocketAddr,
+    mut ref_mut: RefMut<'_, u16, FrameBufferState>,
+) {
     write_into_frame_buffer(ref_mut.value_mut(), msg);
     ref_mut.value_mut().ready = true;
     ref_mut.value_mut().last_active = SystemTime::now();

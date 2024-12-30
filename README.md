@@ -17,4 +17,8 @@ The compositing happens by port number, lower ports are lower layers.
 
 Provide no params or all
 
-cargo run <LEDs-get-crazy-payloads Location : ledsgc.luxeria.ch:54321> <height : 24> <width: 48> <layers : 100>
+cargo run <start-port : 9000> <LEDs-get-crazy-payloads Location : ledsgc.luxeria.ch:54321> <height : 24> <width: 48> <layers : 100>
+
+
+This would open Ports 9000-9100.
+
